@@ -19,6 +19,9 @@ jobs:
           & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Activate MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Cache vcpkg binaries and CommonLibVR fetch
         uses: actions/cache@v4
         with:
