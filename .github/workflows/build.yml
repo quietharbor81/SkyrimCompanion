@@ -1,0 +1,42 @@
+name: Build SKSE plugin
+
+on:
+  push:
+    branches: [main]
+    paths: ["skse-plugin/**", "version.txt", ".github/workflows/build.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
+          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cache vcpkg binaries and CommonLibVR fetch
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\vcpkg\archives
+            skse-plugin\build\release\_deps
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('skse-plugin/vcpkg.json', 'skse-plugin/vcpkg-configuration.json') }}
+
+      - name: Configure
+        working-directory: skse-plugin
+        run: cmake --preset release
+
+      - name: Build
+        working-directory: skse-plugin
+        run: cmake --build --preset release
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyrimCompanionExporter
+          path: skse-plugin/build/release/*.dll

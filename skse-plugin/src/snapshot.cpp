@@ -24,6 +24,13 @@ namespace companion
         constexpr int kProtocolVersion = 1;
         constexpr RE::FormID kTamrielWorldspace = 0x0000003C;
 
+        // The quest-journal sweep and bounty diff walk every quest and crime-tracking
+        // faction in the load order — thousands of forms on big installs — and resolve
+        // text tokens besides. Neither list needs 250ms freshness, so both rebuild on
+        // their own slower cadence (compile-time for simplicity; bump here to repace).
+        constexpr auto kQuestsInterval = 3s;
+        constexpr auto kPlacesInterval = 30s;
+
         std::string SafeStr(const char* s) { return s ? s : ""; }
 
         json Vec3(const RE::NiPoint3& p) { return { { "x", p.x }, { "y", p.y }, { "z", p.z } }; }
@@ -86,8 +93,22 @@ namespace companion
             return j;
         }
 
-        json Crime(RE::TESDataHandler* data)
+        // Bounties plus the bounty-event diff, cached: both walk every crime-tracking
+        // faction in the load order, so the pass runs on the journal's slow cadence
+        // (see kQuestsInterval) instead of twice per snapshot. PollCrime compares the
+        // current gold against its baselines to emit crime events; those still reach
+        // the app every snapshot through events::Recent().
+        const json& Crime(RE::TESDataHandler* data)
         {
+            static json cache = json::object();
+            static std::chrono::steady_clock::time_point next{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next && !events::ConsumeJournalDirty()) {
+                return cache;
+            }
+            next = now + kQuestsInterval;
+
+            events::PollCrime(data);
             json bounties = json::array();
             for (auto* faction : data->GetFormArray<RE::TESFaction>()) {
                 if (!faction || !(faction->data.flags & RE::FACTION_DATA::kTrackCrime)) {
@@ -104,7 +125,9 @@ namespace companion
                     { "non_violent", nonViolent },
                 });
             }
-            return { { "bounties", bounties } };
+            json result = { { "bounties", std::move(bounties) } };
+            cache = std::move(result);
+            return cache;
         }
 
         const char* QuestKind(RE::QUEST_DATA::Type type)
@@ -232,8 +255,21 @@ namespace companion
         // Every quest the journal could list, with where it stands for the player:
         // "tracked"/"current" (running, shown in the journal), "completed" (finished or failed),
         // or "unknown" (a named quest the player hasn't been given yet).
-        json Quests(RE::TESDataHandler* data)
+        //
+        // Cached: the sweep touches every quest in the load order — thousands on big
+        // installs — and resolves text tokens for each shown objective, so it rebuilds on
+        // the slow journal cadence (see kQuestsInterval) instead of every snapshot. A save
+        // load invalidates the cache (a different save means different states).
+        const json& Quests(RE::TESDataHandler* data)
         {
+            static json cache = json::array();
+            static std::chrono::steady_clock::time_point next{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next && !events::ConsumeJournalDirty()) {
+                return cache;
+            }
+            next = now + kQuestsInterval;
+
             json quests = json::array();
             for (auto* quest : data->GetFormArray<RE::TESQuest>()) {
                 if (!quest) {
@@ -279,7 +315,8 @@ namespace companion
                     { "objectives", objectives },
                 });
             }
-            return quests;
+            cache = std::move(quests);
+            return cache;
         }
 
         // True when `ref` is in the cell or worldspace the player is in, so its
@@ -520,17 +557,19 @@ namespace companion
         }
 
         // Found (visible) world map markers in Tamriel. Map markers are persistent references,
-        // so they all live in the worldspace's persistent cell. Rebuilt every few seconds since
-        // walking that cell each snapshot is wasteful and the list rarely changes.
+        // so they all live in the worldspace's persistent cell. Walking that cell costs a
+        // frame spike, and the list only changes when the player discovers a location or loads
+        // a save — both set the dirty flag in events — so rebuilds happen on demand with a
+        // slow 30s refresh as a fallback.
         const json& Places()
         {
             static json cache = json::array();
             static std::chrono::steady_clock::time_point next{};
             const auto now = std::chrono::steady_clock::now();
-            if (now < next) {
+            if (now < next && !events::ConsumePlacesDirty()) {
                 return cache;
             }
-            next = now + 5s;
+            next = now + kPlacesInterval;
 
             json places = json::array();
             auto* tamriel = RE::TESForm::LookupByID<RE::TESWorldSpace>(kTamrielWorldspace);
@@ -582,7 +621,6 @@ namespace companion
             j["quests"] = Quests(data);
             j["markers"] = Markers(data, player);
             j["places"] = Places();
-            events::PollCrime(data);
         }
         j["events"] = events::Recent();
         return j.dump(-1, ' ', false, json::error_handler_t::replace);

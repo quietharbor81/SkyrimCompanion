@@ -10,6 +10,14 @@ namespace companion::events
     // A save was loaded or a new game started: forget per-game state such as bounty baselines.
     void OnGameLoaded();
 
+    // Cache invalidation for the throttled snapshot rebuilds in snapshot.cpp. Journal
+    // (quests + bounties) goes stale after a save load; world-map places go stale after
+    // a load and whenever a location is discovered.
+    void MarkJournalDirty();
+    bool ConsumeJournalDirty();
+    void MarkPlacesDirty();
+    bool ConsumePlacesDirty();
+
     // Records new bounties since the last call. Must run on the game thread.
     void PollCrime(RE::TESDataHandler* data);
 

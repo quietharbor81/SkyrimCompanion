@@ -4,6 +4,7 @@
 
 #include "events.h"
 
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <format>
@@ -28,6 +29,11 @@ namespace companion::events
 
         std::map<RE::FormID, std::int32_t> g_bounties;
         bool g_bountiesKnown = false;
+
+        // Snapshot cache invalidation (see events.h). Set on the game thread, consumed
+        // by the snapshot builder on the same thread, so plain atomics are enough.
+        std::atomic_bool g_journalDirty{ false };
+        std::atomic_bool g_placesDirty{ false };
 
         std::string SafeStr(const char* s) { return s ? s : ""; }
 
@@ -154,6 +160,7 @@ namespace companion::events
             Result ProcessEvent(const RE::LocationDiscovery::Event* e, RE::BSTEventSource<RE::LocationDiscovery::Event>*) override
             {
                 if (e && e->mapMarkerData) {
+                    MarkPlacesDirty();
                     Add("discovered", std::format("Discovered {}", SafeStr(e->mapMarkerData->locationName.GetFullName())));
                 }
                 return Result::kContinue;
@@ -202,7 +209,14 @@ namespace companion::events
     void OnGameLoaded()
     {
         g_bountiesKnown = false;
+        MarkJournalDirty();
+        MarkPlacesDirty();
     }
+
+    void MarkJournalDirty() { g_journalDirty = true; }
+    bool ConsumeJournalDirty() { return g_journalDirty.exchange(false); }
+    void MarkPlacesDirty() { g_placesDirty = true; }
+    bool ConsumePlacesDirty() { return g_placesDirty.exchange(false); }
 
     void PollCrime(RE::TESDataHandler* data)
     {
